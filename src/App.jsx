@@ -2,8 +2,6 @@ import { useEffect, useState } from "react";
 import { Link, NavLink, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { api, signOut } from "./api";
 
-const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
-
 function Shell({ me, children, onSignOut }) {
   return (
     <div className="shell">
@@ -28,14 +26,36 @@ function Shell({ me, children, onSignOut }) {
   );
 }
 
-function SignIn() {
+function SignIn({ onSignedIn }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  async function submit(event) {
+    event.preventDefault();
+    setError("");
+    try {
+      const body = await api("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ username, password }),
+      });
+      if (body.token) sessionStorage.setItem("veyra_token", body.token);
+      onSignedIn({ user: body.user, tenant: body.tenant });
+    } catch (err) {
+      setError(err.message);
+    }
+  }
   return (
     <section className="signin">
       <div>
         <p className="eyebrow">Veyra</p>
         <h1>Sign in to place calls and read the outcome.</h1>
-        <p>Google checks the address, then Veyra accepts it only when it is on the allowlist.</p>
-        <a className="button" href="/api/auth/google" data-client-id={clientId}>Continue with Google</a>
+        <form onSubmit={submit} className="stack">
+          <label>Username<input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required /></label>
+          <label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /></label>
+          <button className="button" type="submit">Sign in</button>
+        </form>
+        {error && <p className="error">{error}</p>}
+        {/* <a className="button" href="/api/auth/google">Continue with Google</a> */}
       </div>
     </section>
   );
@@ -204,7 +224,35 @@ function CallDetail() {
   );
 }
 
-function Billing() {
+function AdminBilling() {
+  const [report, setReport] = useState(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    api("/api/admin/billing").then(setReport).catch((err) => setError(err.message));
+  }, []);
+  return (
+    <section>
+      <h1>Billing</h1>
+      {error && <p className="error">{error}</p>}
+      <div className="stats">
+        <article><span>Charged</span><strong>{report ? `₹${report.chargedInr}` : "…"}</strong></article>
+        <article><span>Expected</span><strong>{report ? `₹${report.expectedInr}` : "…"}</strong></article>
+      </div>
+      <ul className="cards">
+        {(report?.customers || []).map((customer) => (
+          <li key={customer.tenantId}>
+            <strong>{customer.name}</strong>
+            <span>{customer.email}</span>
+            <span>Charged ₹{customer.chargedInr} · Expected ₹{customer.expectedInr}</span>
+            <span>{customer.lastSyncedAt ? `Synced ${customer.lastSyncedAt}` : "Not synced"}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function CustomerBilling() {
   const [wallet, setWallet] = useState(null);
   const [intents, setIntents] = useState([]);
   const [message, setMessage] = useState("");
@@ -252,6 +300,11 @@ function Billing() {
       </ul>
     </section>
   );
+}
+
+function Billing({ me }) {
+  if (me?.user?.role === "admin") return <AdminBilling />;
+  return <CustomerBilling />;
 }
 
 function Hvac() {
@@ -353,7 +406,7 @@ export default function App() {
     api("/api/me").then(setMe).catch(() => setMe(null));
   }, []);
   if (me === undefined) return <p className="boot">Loading Veyra…</p>;
-  if (!me) return <SignIn />;
+  if (!me) return <SignIn onSignedIn={setMe} />;
   async function onSignOut() {
     await signOut();
     setMe(null);
@@ -365,7 +418,7 @@ export default function App() {
         <Route path="/agents" element={<Agents />} />
         <Route path="/call" element={<PlaceCall />} />
         <Route path="/calls/:id" element={<CallDetail />} />
-        <Route path="/billing" element={<Billing />} />
+        <Route path="/billing" element={<Billing me={me} />} />
         <Route path="/hvac" element={<Hvac />} />
         <Route path="/demo-links" element={<DemoLinks />} />
       </Routes>
