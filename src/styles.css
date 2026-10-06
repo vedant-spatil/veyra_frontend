@@ -54,6 +54,13 @@ dt { color: #6f675d; font-size: 0.8rem; }
 dd { margin: 0.15rem 0 0; }
 pre { white-space: pre-wrap; background: white; padding: 1rem; border-radius: 12px; }
 .error { color: #8d2d2d; }
+.text-link {
+  margin-top: 1rem;
+  background: transparent;
+  color: #6d5420;
+  padding: 0;
+  border-radius: 0;
+}
 .boot { padding: 2rem; }
 table { width: 100%; border-collapse: collapse; background: white; }
 th, td { text-align: left; padding: 0.55rem 0.7rem; border-bottom: 1px solid #eee6da; }
