@@ -26,20 +26,59 @@ function Shell({ me, children, onSignOut }) {
   );
 }
 
+const SIGNUP_DOMAINS = ["gmail.com", "outlook.com", "hotmail.com"];
+
+function signupEmailOk(email) {
+  const normalized = email.trim().toLowerCase();
+  const parts = normalized.split("@");
+  if (parts.length !== 2 || !normalized.endsWith(".com")) return false;
+  const [local, domain] = parts;
+  return Boolean(local) && SIGNUP_DOMAINS.includes(domain);
+}
+
 function SignIn({ onSignedIn }) {
+  const [mode, setMode] = useState("signin");
   const [username, setUsername] = useState("");
+  const [name, setName] = useState("");
   const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
   const [error, setError] = useState("");
+
+  function finish(body) {
+    if (body.token) sessionStorage.setItem("veyra_token", body.token);
+    onSignedIn({ user: body.user, tenant: body.tenant });
+  }
+
   async function submit(event) {
     event.preventDefault();
     setError("");
     try {
+      if (mode === "signup") {
+        if (!signupEmailOk(username)) {
+          setError("Use a gmail.com, outlook.com, or hotmail.com address.");
+          return;
+        }
+        await api("/api/auth/signup", {
+          method: "POST",
+          body: JSON.stringify({ name, email: username, password }),
+        });
+        setMode("code");
+        setError("");
+        return;
+      }
+      if (mode === "code") {
+        const body = await api("/api/auth/signup/verify", {
+          method: "POST",
+          body: JSON.stringify({ email: username, code }),
+        });
+        finish(body);
+        return;
+      }
       const body = await api("/api/auth/login", {
         method: "POST",
         body: JSON.stringify({ username, password }),
       });
-      if (body.token) sessionStorage.setItem("veyra_token", body.token);
-      onSignedIn({ user: body.user, tenant: body.tenant });
+      finish(body);
     } catch (err) {
       setError(err.message);
     }
@@ -48,14 +87,29 @@ function SignIn({ onSignedIn }) {
     <section className="signin">
       <div>
         <p className="eyebrow">Veyra</p>
-        <h1>Sign in to place calls and read the outcome.</h1>
+        <h1>{mode === "code" ? "Enter the code from your email." : mode === "signup" ? "Create a customer account." : "Sign in to place calls and read the outcome."}</h1>
         <form onSubmit={submit} className="stack">
-          <label>Username<input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required /></label>
-          <label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /></label>
-          <button className="button" type="submit">Sign in</button>
+          {mode === "signup" && (
+            <label>Name<input value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" required /></label>
+          )}
+          {mode !== "code" && (
+            <>
+              <label>Email<input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" type="email" required /></label>
+              <label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "signup" ? "new-password" : "current-password"} required /></label>
+            </>
+          )}
+          {mode === "code" && (
+            <label>Code<input value={code} onChange={(event) => setCode(event.target.value)} inputMode="numeric" autoComplete="one-time-code" required /></label>
+          )}
+          <button className="button" type="submit">{mode === "code" ? "Confirm code" : mode === "signup" ? "Sign up" : "Sign in"}</button>
         </form>
+        {mode === "code" && <p className="muted">We sent a code to {username}.</p>}
         {error && <p className="error">{error}</p>}
-        {/* <a className="button" href="/api/auth/google">Continue with Google</a> */}
+        {mode === "signin" ? (
+          <button type="button" className="text-link" onClick={() => { setMode("signup"); setError(""); }}>Don't have an account → Sign up</button>
+        ) : (
+          <button type="button" className="text-link" onClick={() => { setMode("signin"); setCode(""); setError(""); }}>Already have an account → Sign in</button>
+        )}
       </div>
     </section>
   );
@@ -167,7 +221,11 @@ function PlaceCall() {
   const navigate = useNavigate();
   const [to, setTo] = useState("+91");
   const [contactName, setContactName] = useState("");
+  const [credits, setCredits] = useState(null);
   const [error, setError] = useState("");
+  useEffect(() => {
+    api("/api/wallet").then((body) => setCredits(body.wallet.balancePaise)).catch((err) => setError(err.message));
+  }, []);
   async function submit(event) {
     event.preventDefault();
     setError("");
@@ -179,12 +237,14 @@ function PlaceCall() {
       navigate(`/calls/${body.call.id}`);
     } catch (err) {
       setError(err.message);
+      api("/api/wallet").then((body) => setCredits(body.wallet.balancePaise)).catch(() => {});
     }
   }
   return (
     <section>
       <h1>Place a call</h1>
-      <p className="muted">This dials through Dograh workflow 1.</p>
+      <p className="muted">This dials through Dograh workflow 1. Each test call costs 5 credits.</p>
+      <p>Credits: {credits === null ? "…" : credits}</p>
       {error && <p className="error">{error}</p>}
       <form onSubmit={submit} className="stack">
         <label>Destination<input value={to} onChange={(event) => setTo(event.target.value)} placeholder="+9198…" required /></label>
@@ -200,7 +260,23 @@ function CallDetail() {
   const [call, setCall] = useState(null);
   const [error, setError] = useState("");
   useEffect(() => {
-    api(`/api/calls/${id}`).then((body) => setCall(body.call)).catch((err) => setError(err.message));
+    let alive = true;
+    let timer = 0;
+    async function load() {
+      try {
+        const body = await api(`/api/calls/${id}`);
+        if (!alive) return;
+        setCall(body.call);
+        if (!["completed", "failed"].includes(body.call.status)) timer = window.setTimeout(load, 4000);
+      } catch (err) {
+        if (alive) setError(err.message);
+      }
+    }
+    load();
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
   }, [id]);
   if (error) return <p className="error">{error}</p>;
   if (!call) return <p>Loading call…</p>;
@@ -209,7 +285,9 @@ function CallDetail() {
     <section>
       <h1>{call.to}</h1>
       <p className="muted">{call.status} · workflow {call.workflowId}</p>
-      {call.recordingUrl && <audio controls src={call.recordingUrl} />}
+      {call.recordingUrl
+        ? <audio controls src={`/api/calls/${call.id}/recording`} />
+        : <p className="muted">Recording is not ready yet.</p>}
       <h2>Extracted fields</h2>
       <dl className="fields">
         <div><dt>Caller name</dt><dd>{fields.caller_name || "Not captured"}</dd></div>
